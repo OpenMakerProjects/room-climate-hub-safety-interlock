@@ -1,22 +1,2 @@
 # Test plan
-
-## Static checks
-
-1. Run `python tools/validate.py`.
-2. Confirm the firmware or application starts without missing configuration.
-3. Compare the assembled wiring with `docs/wiring.md` and component datasheets.
-
-## Functional checks
-
-1. Start with simulated or disconnected actuators.
-2. Feed low, nominal, and high readings into the controller.
-3. Confirm the **safety latch** behavior matches the serial or console output.
-4. Disconnect one sensor and confirm the system enters a safe state.
-5. Restore the sensor and verify recovery requires an intentional acknowledgement for latched safety modes.
-
-## Acceptance criteria
-
-- Telemetry includes a timestamp, state, input readings, and output state.
-- Invalid readings do not command an actuator on.
-- The output changes only after the configured threshold and debounce checks pass.
-- The steps in the README reproduce the demonstration.
+CI exercises warm-up refusal, safe stability, sound/PIR/invalid input trip, stop, rearm and uint32 timer wrap; compiles NodeMCU target; validates illustration, SVG, links, MIT and credentials. Physical protocol: keep only LED connected; warm up 60s, send ARM newline over FFE1, move in front of PIR or clap, confirm LED goes off and latched telemetry true. Wait safe 3s then ARM. Test STOP. Do not infer safety certification from this experiment. Physical tests remain unperformed.

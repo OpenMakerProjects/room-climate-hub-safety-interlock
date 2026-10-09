@@ -1,9 +1,2 @@
 # Architecture
-
-```text
-Sensors -> validation and filtering -> safety latch -> output/alert
-                                      |
-                                      +-> BLE telemetry and logs
-```
-
-The implementation separates acquisition, decision logic, output handling, and telemetry. Hardware-specific access is kept at the edge so the core behavior can be tested with simulated readings.
+64 ADC readings every 100ms produce peak-to-peak amplitude. PIR and ADC range validity gate permission. Sixty-second warm-up plus three seconds continuously safe are required for BLE ARM. Any motion, loud sample or invalid/clipped ADC trips an armed latch. STOP always disables. BLE UART and USB serial publish JSON each second. State is volatile; reboot disables permission. The host policy class is shared with firmware.
