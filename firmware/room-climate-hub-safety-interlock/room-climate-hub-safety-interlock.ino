@@ -1,107 +1,34 @@
 #include <Arduino.h>
-
-#ifndef LED_BUILTIN
-#define LED_BUILTIN 2
-#endif
-
-// Room Climate Hub Safety Interlock
-// Roadmap project 9; mode: safety_latch
-constexpr uint8_t SENSOR_PINS[] = {A0, A1, A2};
-constexpr size_t SENSOR_COUNT = sizeof(SENSOR_PINS) / sizeof(SENSOR_PINS[0]);
-constexpr uint8_t OUTPUT_PIN = LED_BUILTIN;
-constexpr unsigned long SAMPLE_INTERVAL_MS = 1500UL;
-constexpr float TRIGGER_THRESHOLD = 0.54f;
-constexpr uint8_t REQUIRED_CONFIRMATIONS = 3;
-
-enum class SystemState : uint8_t { Starting, Normal, Active, Fault };
-
-struct Snapshot {
-  float values[SENSOR_COUNT];
-  float score;
-  bool valid;
-};
-
-SystemState state = SystemState::Starting;
-unsigned long lastSampleAt = 0;
-uint8_t confirmations = 0;
-bool outputActive = false;
-
-float normalizeReading(int raw) {
-  return constrain(raw / 1023.0f, 0.0f, 1.0f);
+#include <SoftwareSerial.h>
+#include "../interlock.h"
+SoftwareSerial ble(12,13); // RX D6 <- HM10 TX, TX D7 -> HM10 RX
+Interlock guard;
+uint32_t lastSample=0;bool warm=false,safe=false;char command[16];uint8_t used=0;
+void handle(char c){
+ if(c=='\r')return;
+ if(c=='\n'){
+  command[used]=0;
+  if(!strcmp(command,"ARM"))guard.arm(millis(),warm,safe);
+  else if(!strcmp(command,"STOP"))guard.stop();
+  used=0;return;
+ }
+ if(used<sizeof(command)-1)command[used++]=c;else used=0;
 }
-
-Snapshot acquireSnapshot() {
-  Snapshot snapshot{};
-  snapshot.valid = true;
-  float sum = 0.0f;
-  for (size_t index = 0; index < SENSOR_COUNT; ++index) {
-    const int raw = analogRead(SENSOR_PINS[index]);
-    if (raw < 0) snapshot.valid = false;
-    snapshot.values[index] = normalizeReading(raw);
-    sum += snapshot.values[index];
-  }
-  snapshot.score = sum / SENSOR_COUNT;
-  return snapshot;
+void setup(){
+ pinMode(4,OUTPUT);digitalWrite(4,LOW); // D2 permission LED only
+ pinMode(14,INPUT); // D5 PIR
+ Serial.begin(115200);ble.begin(9600);
 }
-
-bool decide(const Snapshot &snapshot) {
-  if (!snapshot.valid) return false;
-  const bool condition = snapshot.score >= TRIGGER_THRESHOLD;
-  if (!condition) {
-    confirmations = 0;
-  } else if (confirmations < REQUIRED_CONFIRMATIONS) {
-    confirmations += 1;
-  }
-  return confirmations >= REQUIRED_CONFIRMATIONS;
-}
-
-void applyOutput(bool requested, bool valid) {
-  if (!valid) {
-    outputActive = false;
-    state = SystemState::Fault;
-  } else {
-    outputActive = requested;
-    state = requested ? SystemState::Active : SystemState::Normal;
-  }
-  digitalWrite(OUTPUT_PIN, outputActive ? HIGH : LOW);
-}
-
-const char *stateName() {
-  switch (state) {
-    case SystemState::Starting: return "starting";
-    case SystemState::Normal: return "normal";
-    case SystemState::Active: return "active";
-    default: return "fault";
-  }
-}
-
-void publishTelemetry(const Snapshot &snapshot) {
-  Serial.print(R"json({"project_id":9,"mode":"safety_latch","state":")json");
-  Serial.print(stateName());
-  Serial.print(R"json(","score":)json");
-  Serial.print(snapshot.score, 3);
-  Serial.print(R"json(,"output":)json");
-  Serial.print(outputActive ? "true" : "false");
-  Serial.print(R"json(,"values":[)json");
-  for (size_t index = 0; index < SENSOR_COUNT; ++index) {
-    if (index) Serial.print(',');
-    Serial.print(snapshot.values[index], 3);
-  }
-  Serial.println("]}");
-}
-
-void setup() {
-  pinMode(OUTPUT_PIN, OUTPUT);
-  digitalWrite(OUTPUT_PIN, LOW);
-  Serial.begin(115200);
-  state = SystemState::Normal;
-}
-
-void loop() {
-  const unsigned long now = millis();
-  if (now - lastSampleAt < SAMPLE_INTERVAL_MS) return;
-  lastSampleAt = now;
-  const Snapshot snapshot = acquireSnapshot();
-  applyOutput(decide(snapshot), snapshot.valid);
-  publishTelemetry(snapshot);
+void loop(){
+ while(ble.available())handle(char(ble.read()));
+ uint32_t now=millis();
+ if(uint32_t(now-lastSample)<100){delay(1);return;}lastSample=now;
+ int lo=1023,hi=0;bool valid=true;
+ for(int i=0;i<64;i++){int v=analogRead(A0);lo=min(lo,v);hi=max(hi,v);if(v<2||v>1021)valid=false;delayMicroseconds(100);}
+ warm=now>=60000;bool motion=digitalRead(14)==HIGH,loud=hi-lo>=180;safe=valid&&!motion&&!loud;
+ guard.update(now,warm,motion,loud,valid);
+ digitalWrite(4,guard.armed?HIGH:LOW);
+ char line[180];snprintf(line,sizeof(line),"{\"id\":9,\"warm\":%s,\"motion\":%s,\"sound_pp\":%d,\"valid\":%s,\"armed\":%s,\"latched\":%s}",
+ warm?"true":"false",motion?"true":"false",hi-lo,valid?"true":"false",guard.armed?"true":"false",guard.latched?"true":"false");
+ static uint32_t reported=0;if(uint32_t(now-reported)>=1000){reported=now;Serial.println(line);ble.println(line);}
 }
